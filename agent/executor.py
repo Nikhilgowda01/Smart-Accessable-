@@ -4,6 +4,12 @@
 from agent.safety import validate_plan
 from agent.schemas import Action, ActionPlan
 
+try:
+    from app.database import get_all_device_states, update_device_state, save_action_plan_record
+    _HAS_DB = True
+except Exception:
+    _HAS_DB = False
+
 
 # Simulated device states. These are not real physical devices.
 _INITIAL_DEVICE_STATES = {
@@ -17,7 +23,14 @@ _device_states = _INITIAL_DEVICE_STATES.copy()
 
 
 def get_device_states() -> dict[str, str]:
-    """Return a copy of the current simulated device states."""
+    """Return a copy of the current simulated device states (from SQLite if available)."""
+    if _HAS_DB:
+        try:
+            states = get_all_device_states()
+            if states:
+                return states
+        except Exception:
+            pass
     return _device_states.copy()
 
 
@@ -25,6 +38,12 @@ def reset_device_states() -> None:
     """Reset all simulated devices to their initial states."""
     _device_states.clear()
     _device_states.update(_INITIAL_DEVICE_STATES)
+    if _HAS_DB:
+        try:
+            for dev, st in _INITIAL_DEVICE_STATES.items():
+                update_device_state(dev, st)
+        except Exception:
+            pass
 
 
 def _execute_action(action: Action) -> str:
@@ -47,6 +66,11 @@ def _execute_action(action: Action) -> str:
         raise ValueError(f"Unsupported device: {action.device}")
 
     _device_states[action.device] = state
+    if _HAS_DB:
+        try:
+            update_device_state(action.device, state)
+        except Exception:
+            pass
     return state
 
 
@@ -101,8 +125,16 @@ def execute_plan(
             "new_state": new_state,
         })
 
-    return {
+    response = {
         "request": plan.request,
         "results": results,
         "device_states": get_device_states(),
     }
+
+    if _HAS_DB:
+        try:
+            save_action_plan_record(plan.request, plan.model_dump_json(), "executed")
+        except Exception:
+            pass
+
+    return response

@@ -1,21 +1,50 @@
 """
 Amazon One - FastAPI Application Server
-Provides REST API endpoints for services, discovery, AI assistance, products, recommendations, and mock activities.
+Provides REST API endpoints with SQLite database persistence for:
+- AI assistant chat history
+- User favorites and bookmarks
+- Shopping cart items
+- Marketplace product listings
+- Smart home device states
+- Agent action plan records
 """
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
-import os
+from typing import List, Optional, Dict, Any
 import datetime
 
 from app.services_data import SERVICES_DATA, SERVICE_CATEGORIES
+from app.database import (
+    init_db,
+    save_chat_message,
+    get_chat_history,
+    clear_chat_history,
+    save_favorite,
+    get_favorites,
+    remove_favorite,
+    save_cart_item,
+    get_cart_items,
+    remove_cart_item,
+    clear_cart,
+    save_product,
+    get_products,
+    delete_product,
+    get_all_device_states,
+    update_device_state,
+    save_action_plan_record,
+    get_action_plans_history,
+    DB_PATH,
+)
+
+# Initialize database tables on startup
+init_db()
 
 app = FastAPI(
     title="Amazon One Unified Ecosystem API",
-    description="Independent hackathon prototype backend for discovery across Amazon services.",
-    version="1.0.0"
+    description="Independent hackathon prototype backend with SQLite persistence for discovery across Amazon services.",
+    version="1.1.0"
 )
 
 # CORS configuration for React frontend
@@ -27,16 +56,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Request / Response Schemas
 class AssistantRequest(BaseModel):
     message: str
     context: Optional[dict] = None
+    sessionId: Optional[str] = "default"
+
 
 class RecommendationRequest(BaseModel):
     interests: List[str]
 
+
 class FavoriteRequest(BaseModel):
     serviceId: str
+    userId: Optional[str] = "guest"
+
+
+class CartItemRequest(BaseModel):
+    id: str
+    name: str
+    price: float
+    quantity: Optional[int] = 1
+    category: Optional[str] = ""
+    image: Optional[str] = ""
+    userId: Optional[str] = "guest"
+
+
+class ProductRequest(BaseModel):
+    id: Optional[str] = None
+    title: str
+    category: str
+    price: float
+    condition: Optional[str] = "Brand New"
+    specs: Optional[Dict[str, Any]] = None
+    image: Optional[str] = ""
+    userId: Optional[str] = "guest"
+
+
+class DeviceStateRequest(BaseModel):
+    state: str
 
 
 # 1. Services Endpoints
@@ -60,6 +119,7 @@ def get_services(category: Optional[str] = None, q: Optional[str] = None):
         "categories": SERVICE_CATEGORIES
     }
 
+
 @app.get("/api/services/{service_id}")
 def get_service_by_id(service_id: str):
     found = next((s for s in SERVICES_DATA if s["id"] == service_id), None)
@@ -68,10 +128,11 @@ def get_service_by_id(service_id: str):
     return found
 
 
-# 2. AI Service Discovery Assistant Endpoint
+# 2. AI Service Discovery Assistant Endpoint with SQLite Persistence
 @app.post("/api/assistant")
 def ask_assistant(req: AssistantRequest):
     query = req.message.lower().strip()
+    session_id = req.sessionId or "default"
     reply = ""
     matched_services = []
 
@@ -127,11 +188,17 @@ def ask_assistant(req: AssistantRequest):
             matched_services = [s for s in SERVICES_DATA if s["isFeatured"]][:3]
             reply = "I am your Amazon One AI concierge. I can guide you to the exact service across Shopping, Payments, Cloud, Smart Devices, or Entertainment for any task. Try asking: 'Where can I listen to audiobooks?' or 'Which service hosts websites?'"
 
+    # Persist user inquiry and assistant reply to SQLite
+    user_msg_id = save_chat_message("user", req.message, session_id=session_id)
+    asst_msg_id = save_chat_message("assistant", reply, matched_services=matched_services, session_id=session_id)
+
     return {
         "reply": reply,
         "matchedServices": matched_services,
         "timestamp": datetime.datetime.now().strftime("%I:%M %p"),
-        "source": "Amazon One AI Engine",
+        "source": "Amazon One AI Engine (SQLite Persisted)",
+        "messageId": asst_msg_id,
+        "userMessageId": user_msg_id,
         "suggestedQueries": [
             "Which Amazon service can help me buy groceries?",
             "Where can I listen to audiobooks?",
@@ -142,18 +209,110 @@ def ask_assistant(req: AssistantRequest):
     }
 
 
-# 3. Personalized Recommendations
+@app.get("/api/assistant/history")
+def get_assistant_history(sessionId: str = "default", limit: int = 50):
+    """Retrieve persistent conversation history from SQLite."""
+    history = get_chat_history(session_id=sessionId, limit=limit)
+    return {"history": history, "count": len(history), "sessionId": sessionId}
+
+
+@app.delete("/api/assistant/history")
+def clear_assistant_history(sessionId: str = "default"):
+    """Clear chat conversation from SQLite."""
+    clear_chat_history(session_id=sessionId)
+    return {"status": "cleared", "sessionId": sessionId}
+
+
+# 3. User Favorites Endpoints (SQLite Persisted)
+@app.get("/api/favorites")
+def get_user_favorites(userId: str = "guest"):
+    return {"favorites": get_favorites(user_id=userId)}
+
+
+@app.post("/api/favorites")
+def add_favorite(req: FavoriteRequest):
+    save_favorite(service_id=req.serviceId, user_id=req.userId or "guest")
+    return {"status": "saved", "serviceId": req.serviceId}
+
+
+@app.delete("/api/favorites/{service_id}")
+def delete_favorite(service_id: str, userId: str = "guest"):
+    remove_favorite(service_id=service_id, user_id=userId)
+    return {"status": "removed", "serviceId": service_id}
+
+
+# 4. Shopping Cart Endpoints (SQLite Persisted)
+@app.get("/api/cart")
+def get_cart(userId: str = "guest"):
+    items = get_cart_items(user_id=userId)
+    total = sum(item["price"] * item["quantity"] for item in items)
+    return {"items": items, "count": len(items), "total": round(total, 2)}
+
+
+@app.post("/api/cart")
+def add_or_update_cart(req: CartItemRequest):
+    result = save_cart_item(req.model_dump(), user_id=req.userId or "guest")
+    return result
+
+
+@app.delete("/api/cart/{item_id}")
+def delete_cart_item(item_id: str, userId: str = "guest"):
+    remove_cart_item(item_id=item_id, user_id=userId)
+    return {"status": "removed", "itemId": item_id}
+
+
+@app.delete("/api/cart")
+def empty_cart(userId: str = "guest"):
+    clear_cart(user_id=userId)
+    return {"status": "cleared"}
+
+
+# 5. Marketplace Products Endpoints (SQLite Persisted)
+@app.get("/api/products")
+def list_products(userId: Optional[str] = None):
+    return {"products": get_products(user_id=userId)}
+
+
+@app.post("/api/products")
+def create_product(req: ProductRequest):
+    result = save_product(req.model_dump(), user_id=req.userId or "guest")
+    return result
+
+
+@app.delete("/api/products/{product_id}")
+def remove_product(product_id: str):
+    delete_product(product_id=product_id)
+    return {"status": "deleted", "id": product_id}
+
+
+# 6. Smart Home Devices Endpoints (SQLite Persisted)
+@app.get("/api/devices")
+def get_devices():
+    return {"deviceStates": get_all_device_states()}
+
+
+@app.post("/api/devices/{device_id}")
+def set_device_state(device_id: str, req: DeviceStateRequest):
+    updated = update_device_state(device_id=device_id, state=req.state)
+    return {"deviceId": device_id, "state": updated}
+
+
+# 7. Agent Action Plans History (SQLite Persisted)
+@app.get("/api/plans")
+def get_plans_history(limit: int = 20):
+    return {"plans": get_action_plans_history(limit=limit)}
+
+
+# 8. Personalized Recommendations
 @app.post("/api/recommendations")
 def get_recommendations(req: RecommendationRequest):
     user_interests = [i.lower() for i in req.interests]
     recommended = []
 
     for service in SERVICES_DATA:
-        # Check category match
         if service["category"].lower() in user_interests:
             recommended.append(service)
 
-    # Fallback to featured
     if not recommended:
         recommended = [s for s in SERVICES_DATA if s["isFeatured"]]
 
@@ -163,7 +322,7 @@ def get_recommendations(req: RecommendationRequest):
     }
 
 
-# 4. Dashboard Summary Metrics
+# 9. Dashboard Summary Metrics
 @app.get("/api/dashboard")
 def get_dashboard_summary():
     return {
@@ -172,6 +331,11 @@ def get_dashboard_summary():
         "categoriesCount": len(SERVICE_CATEGORIES) - 1,
         "activeServices": 7,
         "simulatedSavings": "$124.50",
+        "database": {
+            "type": "SQLite 3",
+            "path": DB_PATH,
+            "status": "connected"
+        },
         "mockRecentActivity": [
             {"service": "Prime Video", "action": "Watched Fallout S1:E4", "time": "2 hours ago"},
             {"service": "Amazon Shopping", "action": "Order #403-912 Delivered", "time": "Yesterday"},
@@ -183,4 +347,10 @@ def get_dashboard_summary():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "service": "Amazon One Backend", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "service": "Amazon One Backend",
+        "version": "1.1.0",
+        "database": "SQLite (Connected)",
+        "dbPath": DB_PATH
+    }

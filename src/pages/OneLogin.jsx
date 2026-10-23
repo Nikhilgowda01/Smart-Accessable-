@@ -51,15 +51,15 @@ const DEMO_PERSONAS = [
 ];
 
 export default function OneLogin({ initialTab }) {
-  const { login, currentUser, logout, showToast } = useOne();
+  const { login, register, resetPassword, currentUser, logout, showToast } = useOne();
   const navigate = useNavigate();
   const location = useLocation();
 
   const searchParams = new URLSearchParams(location.search);
   const queryTab = searchParams.get('mode') || searchParams.get('tab');
   const [activeTab, setActiveTab] = useState(initialTab || queryTab || 'signin');
-  const [emailOrPhone, setEmailOrPhone] = useState('alex.mercer@amazonone.com');
-  const [password, setPassword] = useState('••••••••••');
+  const [emailOrPhone, setEmailOrPhone] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [keepSignedIn, setKeepSignedIn] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
@@ -79,42 +79,24 @@ export default function OneLogin({ initialTab }) {
   const [showOtpStep, setShowOtpStep] = useState(false);
   const [otpCode, setOtpCode] = useState(['', '', '', '', '', '']);
 
-  const handleSignInSubmit = (e) => {
+  const handleSignInSubmit = async (e) => {
     e.preventDefault();
-    if (!emailOrPhone.trim()) {
-      showToast("Please enter your email or mobile phone number", "warning");
+    if (!emailOrPhone.trim() || !password) {
+      showToast("Enter your email address and password.", "warning");
       return;
     }
-
     setIsLoading(true);
-
-    setTimeout(() => {
+    try {
+      await login(emailOrPhone, password, keepSignedIn);
+      navigate(location.state?.from || '/');
+    } catch {
+      // OneContext displays a friendly Firebase error toast.
+    } finally {
       setIsLoading(false);
-      // Find matching demo persona or create custom user profile
-      const matched = DEMO_PERSONAS.find(p => p.email.toLowerCase() === emailOrPhone.toLowerCase()) || {
-        name: emailOrPhone.split('@')[0] || "Amazon Shopper",
-        email: emailOrPhone,
-        role: "Amazon Prime Customer",
-        tier: "Prime Member",
-        memberSince: "2026",
-        avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80"
-      };
-
-      login({
-        name: matched.name,
-        email: matched.email,
-        isPrime: true,
-        membershipTier: matched.tier,
-        memberSince: matched.memberSince,
-        avatar: matched.avatar
-      });
-
-      const redirectPath = location.state?.from || '/';
-      navigate(redirectPath);
-    }, 800);
+    }
   };
 
-  const handleSignUpSubmit = (e) => {
+  const handleSignUpSubmit = async (e) => {
     e.preventDefault();
     if (!regName.trim() || !regEmail.trim()) {
       showToast("Please fill in your name and email address", "warning");
@@ -130,58 +112,34 @@ export default function OneLogin({ initialTab }) {
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      login({
-        name: regName,
-        email: regEmail,
-        isPrime: true,
-        membershipTier: "Prime 30-Day Trial",
-        memberSince: "2026",
-        avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80"
-      });
-      showToast(`Welcome to Amazon One, ${regName}! Your account is active.`, "success");
+    try {
+      await register({ name: regName, email: regEmail, password: regPassword });
       navigate(location.state?.from || '/');
-    }, 900);
+    } catch {
+      // OneContext displays a friendly Firebase error toast.
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleQuickLogin = (persona) => {
+    // Demo persona buttons now prefill the form; they no longer bypass authentication.
     setEmailOrPhone(persona.email);
-    setPassword("demo-password-2026");
-    login({
-      name: persona.name,
-      email: persona.email,
-      isPrime: true,
-      membershipTier: persona.tier,
-      memberSince: persona.memberSince,
-      avatar: persona.avatar
-    });
-    navigate(location.state?.from || '/');
+    setPassword("");
+    setActiveTab("signin");
+    showToast("Enter the password for this Firebase account to continue.", "info");
   };
 
   const handlePalmScan = () => {
+    // The animation is a prototype only; it cannot authenticate a real palm.
     setPalmScanning(true);
     setPalmSuccess(false);
-
-    setTimeout(() => {
+    window.setTimeout(() => {
       setPalmScanning(false);
-      setPalmSuccess(true);
-      showToast("Palm Vein Signature Authenticated via Amazon One Sensor!", "success");
-
-      setTimeout(() => {
-        login({
-          name: "Alex Mercer",
-          email: "alex.mercer@amazonone.com",
-          isPrime: true,
-          membershipTier: "Amazon One Contactless Biometric",
-          memberSince: "2021",
-          avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80"
-        });
-        navigate(location.state?.from || '/');
-      }, 700);
+      setPalmSuccess(false);
+      showToast("Palm recognition is a demo animation and is not connected to real authentication.", "info");
     }, 1800);
   };
-
   return (
     <div className="login-root-container">
       {/* Centered Amazon Logo Header */}
@@ -291,7 +249,10 @@ export default function OneLogin({ initialTab }) {
                 <div className="form-field-group">
                   <div className="label-with-link">
                     <label htmlFor="password">Password</label>
-                    <a href="#forgot" onClick={(e) => { e.preventDefault(); showToast("Password reset link sent to registered email.", "info"); }} className="forgot-link">
+                    <a href="#forgot" onClick={async (e) => {
+                        e.preventDefault();
+                        try { await resetPassword(emailOrPhone); } catch { /* Error toast is shown by context. */ }
+                      }} className="forgot-link">
                       Forgot your password?
                     </a>
                   </div>
@@ -511,7 +472,7 @@ export default function OneLogin({ initialTab }) {
 
               <div className="palm-security-footnote">
                 <ShieldCheck size={16} className="text-emerald-500" />
-                <span>Protected by optical vein pattern encryption. Never shares biometric raw data.</span>
+                <span>Prototype animation only. Palm biometrics are not connected to authentication.</span>
               </div>
             </div>
           )}
