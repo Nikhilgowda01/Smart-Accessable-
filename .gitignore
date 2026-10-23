@@ -26,8 +26,11 @@ dist-ssr
 # Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
 .venv/
 venv/
+env/
 
 # Local configuration and data
 .env
@@ -37,3 +40,11 @@ venv/
 *.db
 *.sqlite
 *.sqlite3
+*.pem
+*.key
+
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
